@@ -282,8 +282,9 @@ func (tr *Traceroute) sendLoop() {
 	tr.opConfig.wg = wg
 
 	defer func() {
+		log.Println("before wait")
 		wg.Wait()
-		log.Println("waiting")
+		log.Println("after wait")
 	}()
 
 	for ttl := uint16(1); ttl <= tr.trcrtConfig.MaxHops; ttl++ {
