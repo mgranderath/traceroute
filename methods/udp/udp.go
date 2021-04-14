@@ -21,9 +21,9 @@ import (
 )
 
 type inflightData struct {
-	start time.Time
-	ttl   uint16
-	done  chan struct{}
+	start   time.Time
+	ttl     uint16
+	udpConn net.PacketConn
 }
 
 type opConfig struct {
@@ -143,9 +143,9 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 	}
 
 	inflight := inflightData{
-		start: start,
-		ttl:   ttl,
-		done:  make(chan struct{}),
+		start:   start,
+		ttl:     ttl,
+		udpConn: udpConn,
 	}
 
 	tr.results.inflightRequests.Store(uint16(srcPort), inflight)
@@ -154,9 +154,6 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 		for {
 			select {
 			case <-tr.opConfig.ctx.Done():
-				udpConn.Close()
-				return
-			case <-inflight.done:
 				udpConn.Close()
 				return
 			default:
@@ -190,7 +187,7 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 			})
 			tr.opConfig.wg.Done()
 			tr.results.concurrentRequests.Finished()
-			close(request.done)
+			request.udpConn.Close()
 		}
 	}()
 }
@@ -216,7 +213,7 @@ func (tr *Traceroute) handleICMPMessage(msg listener_channel.ReceivedMessage, da
 	})
 	tr.results.concurrentRequests.Finished()
 	tr.opConfig.wg.Done()
-	close(request.done)
+	request.udpConn.Close()
 }
 
 func (tr *Traceroute) icmpListener() {
@@ -270,7 +267,7 @@ func (tr *Traceroute) timeoutLoop() {
 				})
 				tr.results.concurrentRequests.Finished()
 				tr.opConfig.wg.Done()
-				close(request.done)
+				request.udpConn.Close()
 				return true
 			})
 		}

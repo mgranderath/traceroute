@@ -1,7 +1,6 @@
 package taskgroup
 
 import (
-	"log"
 	"sync"
 )
 
@@ -34,7 +33,6 @@ func (t *TaskGroup) Done() {
 		}
 		t.done = []chan struct{}{}
 	}
-	log.Println("Count:", t.count-1)
 	t.count--
 }
 
