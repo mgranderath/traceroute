@@ -281,7 +281,10 @@ func (tr *Traceroute) sendLoop() {
 	wg := taskgroup.New()
 	tr.opConfig.wg = wg
 
-	defer wg.Wait()
+	defer func() {
+		wg.Wait()
+		log.Println("waiting")
+	}()
 
 	for ttl := uint16(1); ttl <= tr.trcrtConfig.MaxHops; ttl++ {
 		select {
@@ -307,6 +310,7 @@ func (tr *Traceroute) start() (*map[uint16][]methods.TracerouteHop, error) {
 
 	tr.sendLoop()
 	tr.opConfig.cancel()
+	tr.opConfig.icmpConn.Close()
 
 	if tr.results.err != nil {
 		return nil, tr.results.err
