@@ -26,18 +26,15 @@ func (t *TaskGroup) Add() {
 }
 
 func (t *TaskGroup) Done() {
-	log.Println("before lock")
 	t.mu.Lock()
-	log.Println("after lock")
 	defer t.mu.Unlock()
 	if t.count-1 == 0 {
 		for _, doneChannel := range t.done {
-			log.Println("before send done")
 			doneChannel <- struct{}{}
-			log.Println("after send done")
 		}
 		t.done = []chan struct{}{}
 	}
+	log.Println("Count:", t.count-1)
 	t.count--
 }
 
