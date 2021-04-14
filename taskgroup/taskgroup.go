@@ -1,6 +1,7 @@
 package taskgroup
 
 import (
+	"log"
 	"sync"
 )
 
@@ -25,11 +26,15 @@ func (t *TaskGroup) Add() {
 }
 
 func (t *TaskGroup) Done() {
+	log.Println("before lock")
 	t.mu.Lock()
+	log.Println("after lock")
 	defer t.mu.Unlock()
 	if t.count-1 == 0 {
 		for _, doneChannel := range t.done {
+			log.Println("before send done")
 			doneChannel <- struct{}{}
+			log.Println("after send done")
 		}
 		t.done = []chan struct{}{}
 	}
@@ -37,8 +42,8 @@ func (t *TaskGroup) Done() {
 }
 
 func (t *TaskGroup) Wait() {
-	t.mu.Lock()
 	doneChannel := make(chan struct{})
+	t.mu.Lock()
 	t.done = append(t.done, doneChannel)
 	t.mu.Unlock()
 	<-doneChannel
