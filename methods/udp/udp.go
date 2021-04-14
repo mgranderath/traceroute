@@ -94,6 +94,12 @@ func (tr *Traceroute) addToResult(ttl uint16, hop methods.TracerouteHop) {
 func (tr *Traceroute) sendMessage(ttl uint16) {
 	srcIP, srcPort := util.LocalIPPort(tr.opConfig.destIP)
 
+	_, ok := tr.results.inflightRequests.Load(uint16(srcPort))
+	if ok {
+		log.Println("Port already used")
+		srcIP, srcPort = util.LocalIPPort(tr.opConfig.destIP)
+	}
+
 	udpConn, err := net.ListenPacket("udp", ":"+strconv.Itoa(srcPort))
 	if err != nil {
 		log.Fatal(err)
