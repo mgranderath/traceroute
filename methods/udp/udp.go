@@ -284,15 +284,6 @@ func (tr *Traceroute) timeoutLoop() {
 func (tr *Traceroute) sendLoop() {
 	rand.Seed(time.Now().UTC().UnixNano())
 
-	wg := taskgroup.New()
-	tr.opConfig.wg = wg
-
-	defer func() {
-		log.Println("before wait")
-		wg.Wait()
-		log.Println("after wait")
-	}()
-
 	for ttl := uint16(1); ttl <= tr.trcrtConfig.MaxHops; ttl++ {
 		select {
 		case <-tr.results.reachedFinalHop.Chan():
@@ -304,7 +295,7 @@ func (tr *Traceroute) sendLoop() {
 			case <-tr.opConfig.ctx.Done():
 				return
 			case <-tr.results.concurrentRequests.Start():
-				wg.Add()
+				tr.opConfig.wg.Add()
 				go tr.sendMessage(ttl)
 			}
 		}
@@ -315,7 +306,15 @@ func (tr *Traceroute) start() (*map[uint16][]methods.TracerouteHop, error) {
 	go tr.timeoutLoop()
 	go tr.icmpListener()
 
+	wg := taskgroup.New()
+	tr.opConfig.wg = wg
+
 	tr.sendLoop()
+
+	log.Println("before wait")
+	wg.Wait()
+	log.Println("after wait")
+
 	tr.opConfig.cancel()
 	tr.opConfig.icmpConn.Close()
 
