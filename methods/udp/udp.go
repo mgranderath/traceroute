@@ -308,9 +308,7 @@ func (tr *Traceroute) start() (*map[uint16][]methods.TracerouteHop, error) {
 
 	tr.sendLoop()
 
-	log.Println("before wait")
 	wg.Wait()
-	log.Println("after wait")
 
 	tr.opConfig.cancel()
 	tr.opConfig.icmpConn.Close()
