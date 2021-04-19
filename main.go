@@ -23,12 +23,12 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Println(res)
-	udpTraceroute := udp.New(ip, methods.TracerouteConfig{
+	udpTraceroute := udp.New(ip, true, methods.TracerouteConfig{
 		MaxHops:          20,
 		NumMeasurements:  3,
 		ParallelRequests: 24,
-		Port:             53,
-		Timeout:          time.Second / 2,
+		Port:             784,
+		Timeout:          2 * time.Second,
 	})
 	res, err = udpTraceroute.Start()
 	if err != nil {

@@ -1,10 +1,9 @@
 package udp
 
 import (
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 	"github.com/mgranderath/traceroute/listener_channel"
 	"github.com/mgranderath/traceroute/methods"
+	"github.com/mgranderath/traceroute/methods/quic"
 	"github.com/mgranderath/traceroute/parallel_limiter"
 	"github.com/mgranderath/traceroute/signal"
 	"github.com/mgranderath/traceroute/taskgroup"
@@ -21,12 +20,13 @@ import (
 )
 
 type inflightData struct {
-	start time.Time
-	ttl   uint16
-	done  chan struct{}
+	start   time.Time
+	ttl     uint16
+	udpConn net.PacketConn
 }
 
 type opConfig struct {
+	quic   bool
 	destIP net.IP
 	wg     *taskgroup.TaskGroup
 
@@ -53,9 +53,10 @@ type Traceroute struct {
 	results     results
 }
 
-func New(destIP net.IP, config methods.TracerouteConfig) *Traceroute {
+func New(destIP net.IP, quic bool, config methods.TracerouteConfig) *Traceroute {
 	return &Traceroute{
 		opConfig: opConfig{
+			quic:   quic,
 			destIP: destIP,
 		},
 		trcrtConfig: config,
@@ -92,34 +93,24 @@ func (tr *Traceroute) addToResult(ttl uint16, hop methods.TracerouteHop) {
 }
 
 func (tr *Traceroute) sendMessage(ttl uint16) {
-	srcIP, srcPort := util.LocalIPPort(tr.opConfig.destIP)
+	_, srcPort := util.LocalIPPort(tr.opConfig.destIP)
+
+	_, ok := tr.results.inflightRequests.Load(uint16(srcPort))
+	if ok {
+		log.Println("Port already used")
+		_, srcPort = util.LocalIPPort(tr.opConfig.destIP)
+	}
 
 	udpConn, err := net.ListenPacket("udp", ":"+strconv.Itoa(srcPort))
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	ipHeader := &layers.IPv4{
-		SrcIP:    srcIP,
-		DstIP:    tr.opConfig.destIP,
-		Protocol: layers.IPProtocolTCP,
-		TTL:      uint8(ttl),
-	}
-
-	udpHeader := &layers.UDP{
-		SrcPort: layers.UDPPort(srcPort),
-		DstPort: layers.UDPPort(tr.trcrtConfig.Port),
-	}
-	_ = udpHeader.SetNetworkLayerForChecksum(ipHeader)
-	buf := gopacket.NewSerializeBuffer()
-	opts := gopacket.SerializeOptions{
-		ComputeChecksums: true,
-		FixLengths:       true,
-	}
-	if err := gopacket.SerializeLayers(buf, opts, udpHeader, gopacket.Payload("HAJSFJHKAJSHFKJHAJKFHKASHKFHHKAFKHFAHSJK")); err != nil {
-		tr.results.err = err
-		tr.opConfig.cancel()
-		return
+	var payload []byte
+	if tr.opConfig.quic {
+		payload = quic.GenerateWithRandomIds()
+	} else {
+		payload = []byte("HAJSFJHKAJSHFKJHAJKFHKASHKFHHKAFKHFAHSJK")
 	}
 
 	err = ipv4.NewPacketConn(udpConn).SetTTL(int(ttl))
@@ -130,16 +121,16 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 	}
 
 	start := time.Now()
-	if _, err := udpConn.WriteTo(buf.Bytes(), &net.UDPAddr{IP: tr.opConfig.destIP, Port: tr.trcrtConfig.Port}); err != nil {
+	if _, err := udpConn.WriteTo(payload, &net.UDPAddr{IP: tr.opConfig.destIP, Port: tr.trcrtConfig.Port}); err != nil {
 		tr.results.err = err
 		tr.opConfig.cancel()
 		return
 	}
 
 	inflight := inflightData{
-		start: start,
-		ttl:   ttl,
-		done:  make(chan struct{}),
+		start:   start,
+		ttl:     ttl,
+		udpConn: udpConn,
 	}
 
 	tr.results.inflightRequests.Store(uint16(srcPort), inflight)
@@ -150,11 +141,9 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 			case <-tr.opConfig.ctx.Done():
 				udpConn.Close()
 				return
-			case <-inflight.done:
-				udpConn.Close()
-				return
 			default:
 			}
+
 			reply := make([]byte, 1500)
 			err = udpConn.SetReadDeadline(time.Now().Add(time.Second))
 			if err != nil {
@@ -184,7 +173,7 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 			})
 			tr.opConfig.wg.Done()
 			tr.results.concurrentRequests.Finished()
-			close(request.done)
+			request.udpConn.Close()
 		}
 	}()
 }
@@ -210,7 +199,7 @@ func (tr *Traceroute) handleICMPMessage(msg listener_channel.ReceivedMessage, da
 	})
 	tr.results.concurrentRequests.Finished()
 	tr.opConfig.wg.Done()
-	close(request.done)
+	request.udpConn.Close()
 }
 
 func (tr *Traceroute) icmpListener() {
@@ -264,7 +253,7 @@ func (tr *Traceroute) timeoutLoop() {
 				})
 				tr.results.concurrentRequests.Finished()
 				tr.opConfig.wg.Done()
-				close(request.done)
+				request.udpConn.Close()
 				return true
 			})
 		}
@@ -278,14 +267,6 @@ func (tr *Traceroute) timeoutLoop() {
 func (tr *Traceroute) sendLoop() {
 	rand.Seed(time.Now().UTC().UnixNano())
 
-	wg := taskgroup.New()
-	tr.opConfig.wg = wg
-
-	defer func() {
-		wg.Wait()
-		log.Println("waiting")
-	}()
-
 	for ttl := uint16(1); ttl <= tr.trcrtConfig.MaxHops; ttl++ {
 		select {
 		case <-tr.results.reachedFinalHop.Chan():
@@ -297,7 +278,7 @@ func (tr *Traceroute) sendLoop() {
 			case <-tr.opConfig.ctx.Done():
 				return
 			case <-tr.results.concurrentRequests.Start():
-				wg.Add()
+				tr.opConfig.wg.Add()
 				go tr.sendMessage(ttl)
 			}
 		}
@@ -308,7 +289,13 @@ func (tr *Traceroute) start() (*map[uint16][]methods.TracerouteHop, error) {
 	go tr.timeoutLoop()
 	go tr.icmpListener()
 
+	wg := taskgroup.New()
+	tr.opConfig.wg = wg
+
 	tr.sendLoop()
+
+	wg.Wait()
+
 	tr.opConfig.cancel()
 	tr.opConfig.icmpConn.Close()
 

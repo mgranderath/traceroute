@@ -37,8 +37,8 @@ func (t *TaskGroup) Done() {
 }
 
 func (t *TaskGroup) Wait() {
-	t.mu.Lock()
 	doneChannel := make(chan struct{})
+	t.mu.Lock()
 	t.done = append(t.done, doneChannel)
 	t.mu.Unlock()
 	<-doneChannel
