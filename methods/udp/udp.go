@@ -1,6 +1,8 @@
 package udp
 
 import (
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 	"github.com/mgranderath/traceroute/listener_channel"
 	"github.com/mgranderath/traceroute/methods"
 	"github.com/mgranderath/traceroute/methods/quic"
@@ -93,12 +95,12 @@ func (tr *Traceroute) addToResult(ttl uint16, hop methods.TracerouteHop) {
 }
 
 func (tr *Traceroute) sendMessage(ttl uint16) {
-	_, srcPort := util.LocalIPPort(tr.opConfig.destIP)
+	srcIP, srcPort := util.LocalIPPort(tr.opConfig.destIP)
 
 	_, ok := tr.results.inflightRequests.Load(uint16(srcPort))
 	if ok {
 		log.Println("Port already used")
-		_, srcPort = util.LocalIPPort(tr.opConfig.destIP)
+		srcIP, srcPort = util.LocalIPPort(tr.opConfig.destIP)
 	}
 
 	udpConn, err := net.ListenPacket("udp", ":"+strconv.Itoa(srcPort))
@@ -110,7 +112,30 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 	if tr.opConfig.quic {
 		payload = quic.GenerateWithRandomIds()
 	} else {
-		payload = []byte("HAJSFJHKAJSHFKJHAJKFHKASHKFHHKAFKHFAHSJK")
+		ipHeader := &layers.IPv4{
+			SrcIP:    srcIP,
+			DstIP:    tr.opConfig.destIP,
+			Protocol: layers.IPProtocolTCP,
+			TTL:      uint8(ttl),
+		}
+
+		udpHeader := &layers.UDP{
+			SrcPort: layers.UDPPort(srcPort),
+			DstPort: layers.UDPPort(tr.trcrtConfig.Port),
+		}
+		_ = udpHeader.SetNetworkLayerForChecksum(ipHeader)
+		buf := gopacket.NewSerializeBuffer()
+		opts := gopacket.SerializeOptions{
+			ComputeChecksums: true,
+			FixLengths:       true,
+		}
+		if err := gopacket.SerializeLayers(buf, opts, udpHeader, gopacket.Payload("HAJSFJHKAJSHFKJHAJKFHKASHKFHHKAFKHFAHSJK")); err != nil {
+			tr.results.err = err
+			tr.opConfig.cancel()
+			return
+		}
+
+		payload = buf.Bytes()
 	}
 
 	err = ipv4.NewPacketConn(udpConn).SetTTL(int(ttl))
