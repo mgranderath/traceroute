@@ -45,6 +45,7 @@ func (p *ParallelLimiter) Finished() {
 		first := p.waiting[0]
 		p.waiting = p.waiting[1:]
 		first <- struct{}{}
+		p.currentRunning++
 	}
 	p.currentRunning--
 	p.mu.Unlock()
