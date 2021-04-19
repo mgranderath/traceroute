@@ -1,10 +1,9 @@
 package udp
 
 import (
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 	"github.com/mgranderath/traceroute/listener_channel"
 	"github.com/mgranderath/traceroute/methods"
+	"github.com/mgranderath/traceroute/methods/quic"
 	"github.com/mgranderath/traceroute/parallel_limiter"
 	"github.com/mgranderath/traceroute/signal"
 	"github.com/mgranderath/traceroute/taskgroup"
@@ -27,6 +26,7 @@ type inflightData struct {
 }
 
 type opConfig struct {
+	quic   bool
 	destIP net.IP
 	wg     *taskgroup.TaskGroup
 
@@ -53,9 +53,10 @@ type Traceroute struct {
 	results     results
 }
 
-func New(destIP net.IP, config methods.TracerouteConfig) *Traceroute {
+func New(destIP net.IP, quic bool, config methods.TracerouteConfig) *Traceroute {
 	return &Traceroute{
 		opConfig: opConfig{
+			quic:   quic,
 			destIP: destIP,
 		},
 		trcrtConfig: config,
@@ -92,12 +93,12 @@ func (tr *Traceroute) addToResult(ttl uint16, hop methods.TracerouteHop) {
 }
 
 func (tr *Traceroute) sendMessage(ttl uint16) {
-	srcIP, srcPort := util.LocalIPPort(tr.opConfig.destIP)
+	_, srcPort := util.LocalIPPort(tr.opConfig.destIP)
 
 	_, ok := tr.results.inflightRequests.Load(uint16(srcPort))
 	if ok {
 		log.Println("Port already used")
-		srcIP, srcPort = util.LocalIPPort(tr.opConfig.destIP)
+		_, srcPort = util.LocalIPPort(tr.opConfig.destIP)
 	}
 
 	udpConn, err := net.ListenPacket("udp", ":"+strconv.Itoa(srcPort))
@@ -105,27 +106,11 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 		log.Fatal(err)
 	}
 
-	ipHeader := &layers.IPv4{
-		SrcIP:    srcIP,
-		DstIP:    tr.opConfig.destIP,
-		Protocol: layers.IPProtocolTCP,
-		TTL:      uint8(ttl),
-	}
-
-	udpHeader := &layers.UDP{
-		SrcPort: layers.UDPPort(srcPort),
-		DstPort: layers.UDPPort(tr.trcrtConfig.Port),
-	}
-	_ = udpHeader.SetNetworkLayerForChecksum(ipHeader)
-	buf := gopacket.NewSerializeBuffer()
-	opts := gopacket.SerializeOptions{
-		ComputeChecksums: true,
-		FixLengths:       true,
-	}
-	if err := gopacket.SerializeLayers(buf, opts, udpHeader, gopacket.Payload("HAJSFJHKAJSHFKJHAJKFHKASHKFHHKAFKHFAHSJK")); err != nil {
-		tr.results.err = err
-		tr.opConfig.cancel()
-		return
+	var payload []byte
+	if tr.opConfig.quic {
+		payload = quic.GenerateWithRandomIds()
+	} else {
+		payload = []byte("HAJSFJHKAJSHFKJHAJKFHKASHKFHHKAFKHFAHSJK")
 	}
 
 	err = ipv4.NewPacketConn(udpConn).SetTTL(int(ttl))
@@ -136,7 +121,7 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 	}
 
 	start := time.Now()
-	if _, err := udpConn.WriteTo(buf.Bytes(), &net.UDPAddr{IP: tr.opConfig.destIP, Port: tr.trcrtConfig.Port}); err != nil {
+	if _, err := udpConn.WriteTo(payload, &net.UDPAddr{IP: tr.opConfig.destIP, Port: tr.trcrtConfig.Port}); err != nil {
 		tr.results.err = err
 		tr.opConfig.cancel()
 		return
@@ -158,6 +143,7 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 				return
 			default:
 			}
+
 			reply := make([]byte, 1500)
 			err = udpConn.SetReadDeadline(time.Now().Add(time.Second))
 			if err != nil {
