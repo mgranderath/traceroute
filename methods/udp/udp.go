@@ -94,7 +94,7 @@ func (tr *Traceroute) addToResult(ttl uint16, hop methods.TracerouteHop) {
 	tr.results.results[ttl] = append(tr.results.results[ttl], hop)
 }
 
-func (tr *Traceroute) sendMessage(ttl uint16) {
+func (tr *Traceroute) getUDPConn(try int) (net.IP, int, net.PacketConn) {
 	srcIP, srcPort := util.LocalIPPort(tr.opConfig.destIP)
 
 	_, ok := tr.results.inflightRequests.Load(uint16(srcPort))
@@ -105,8 +105,17 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 
 	udpConn, err := net.ListenPacket("udp", ":"+strconv.Itoa(srcPort))
 	if err != nil {
-		log.Fatal(err)
+		if try > 3 {
+			log.Fatal(err)
+		}
+		return tr.getUDPConn(try + 1)
 	}
+
+	return srcIP, srcPort, udpConn
+}
+
+func (tr *Traceroute) sendMessage(ttl uint16) {
+	srcIP, srcPort, udpConn := tr.getUDPConn(0)
 
 	var payload []byte
 	if tr.opConfig.quic {
@@ -138,7 +147,7 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 		payload = buf.Bytes()
 	}
 
-	err = ipv4.NewPacketConn(udpConn).SetTTL(int(ttl))
+	err := ipv4.NewPacketConn(udpConn).SetTTL(int(ttl))
 	if err != nil {
 		tr.results.err = err
 		tr.opConfig.cancel()
