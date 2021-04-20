@@ -94,7 +94,15 @@ func (tr *Traceroute) addToResult(ttl uint16, hop methods.TracerouteHop) {
 func (tr *Traceroute) getUDPConn(try int) (net.IP, int, net.PacketConn) {
 	srcIP, _ := util.LocalIPPort(tr.opConfig.destIP)
 
-	udpConn, err := net.ListenPacket("udp", srcIP.String()+":0")
+	var ipString string
+
+	if srcIP == nil {
+		ipString = ""
+	} else {
+		ipString = srcIP.String()
+	}
+
+	udpConn, err := net.ListenPacket("udp", ipString+":0")
 	if err != nil {
 		if try > 3 {
 			log.Fatal(err)
