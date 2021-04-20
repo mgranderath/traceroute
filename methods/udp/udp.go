@@ -18,13 +18,11 @@ import (
 	"net"
 	"strconv"
 	"sync"
-	"time"
+	time "time"
 )
 
 type inflightData struct {
-	start   time.Time
-	ttl     uint16
-	udpConn net.PacketConn
+	icmpMsg chan<- net.Addr
 }
 
 type opConfig struct {
@@ -154,6 +152,9 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 		return
 	}
 
+	icmpMsg := make(chan net.Addr, 1)
+	udpMsg := make(chan net.Addr, 1)
+
 	start := time.Now()
 	if _, err := udpConn.WriteTo(payload, &net.UDPAddr{IP: tr.opConfig.destIP, Port: tr.trcrtConfig.Port}); err != nil {
 		tr.results.err = err
@@ -162,54 +163,58 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 	}
 
 	inflight := inflightData{
-		start:   start,
-		ttl:     ttl,
-		udpConn: udpConn,
+		icmpMsg: icmpMsg,
 	}
 
 	tr.results.inflightRequests.Store(uint16(srcPort), inflight)
 
 	go func() {
-		for {
-			select {
-			case <-tr.opConfig.ctx.Done():
-				udpConn.Close()
-				return
-			default:
-			}
-
-			reply := make([]byte, 1500)
-			err = udpConn.SetReadDeadline(time.Now().Add(time.Second))
-			if err != nil {
-				continue
-			}
-			n, peer, err := udpConn.ReadFrom(reply)
-			if err != nil {
-				continue
-			}
-
-			val, ok := tr.results.inflightRequests.LoadAndDelete(uint16(srcPort))
-			if !ok {
-				continue
-			}
-
-			request := val.(inflightData)
-			elapsed := time.Since(request.start)
-			if peer.(*net.UDPAddr).IP.String() == tr.opConfig.destIP.String() {
-				tr.results.reachedFinalHop.Signal()
-			}
-			tr.addToResult(request.ttl, methods.TracerouteHop{
-				Success: true,
-				Address: &net.IPAddr{IP: peer.(*net.UDPAddr).IP},
-				N:       &n,
-				TTL:     request.ttl,
-				RTT:     &elapsed,
-			})
-			tr.opConfig.wg.Done()
-			tr.results.concurrentRequests.Finished()
-			request.udpConn.Close()
+		reply := make([]byte, 1500)
+		_, peer, err := udpConn.ReadFrom(reply)
+		if err != nil {
+			// probably because we closed the connection
+			return
 		}
+		udpMsg <- peer
 	}()
+
+	select {
+	case peer := <-icmpMsg:
+		rtt := time.Since(start)
+		if peer.(*net.IPAddr).IP.Equal(tr.opConfig.destIP) {
+			tr.results.reachedFinalHop.Signal()
+		}
+		tr.addToResult(ttl, methods.TracerouteHop{
+			Success: true,
+			Address: peer,
+			TTL:     ttl,
+			RTT:     &rtt,
+		})
+	case peer := <-udpMsg:
+		rtt := time.Since(start)
+		ip := peer.(*net.UDPAddr).IP
+		if ip.Equal(tr.opConfig.destIP) {
+			tr.results.reachedFinalHop.Signal()
+		}
+		tr.addToResult(ttl, methods.TracerouteHop{
+			Success: true,
+			Address: &net.IPAddr{IP: ip},
+			TTL:     ttl,
+			RTT:     &rtt,
+		})
+	case <-time.After(tr.trcrtConfig.Timeout):
+		tr.addToResult(ttl, methods.TracerouteHop{
+			Success: false,
+			Address: nil,
+			TTL:     ttl,
+			RTT:     nil,
+		})
+	}
+
+	tr.results.inflightRequests.Delete(uint16(srcPort))
+	udpConn.Close()
+	tr.results.concurrentRequests.Finished()
+	tr.opConfig.wg.Done()
 }
 
 func (tr *Traceroute) handleICMPMessage(msg listener_channel.ReceivedMessage, data []byte) {
@@ -220,20 +225,7 @@ func (tr *Traceroute) handleICMPMessage(msg listener_channel.ReceivedMessage, da
 		return
 	}
 	request := val.(inflightData)
-	elapsed := time.Since(request.start)
-	if msg.Peer.String() == tr.opConfig.destIP.String() {
-		tr.results.reachedFinalHop.Signal()
-	}
-	tr.addToResult(request.ttl, methods.TracerouteHop{
-		Success: true,
-		Address: msg.Peer,
-		N:       msg.N,
-		TTL:     request.ttl,
-		RTT:     &elapsed,
-	})
-	tr.results.concurrentRequests.Finished()
-	tr.opConfig.wg.Done()
-	request.udpConn.Close()
+	request.icmpMsg <- msg.Peer
 }
 
 func (tr *Traceroute) icmpListener() {
@@ -270,34 +262,6 @@ func (tr *Traceroute) icmpListener() {
 	}
 }
 
-func (tr *Traceroute) timeoutLoop() {
-	ticker := time.NewTicker(tr.trcrtConfig.Timeout / 4)
-	go func() {
-		for range ticker.C {
-			tr.results.inflightRequests.Range(func(key, value interface{}) bool {
-				request := value.(inflightData)
-				expired := time.Since(request.start) > tr.trcrtConfig.Timeout
-				if !expired {
-					return true
-				}
-				tr.results.inflightRequests.Delete(key)
-				tr.addToResult(request.ttl, methods.TracerouteHop{
-					Success: false,
-					TTL:     request.ttl,
-				})
-				tr.results.concurrentRequests.Finished()
-				tr.opConfig.wg.Done()
-				request.udpConn.Close()
-				return true
-			})
-		}
-	}()
-	select {
-	case <-tr.opConfig.ctx.Done():
-		ticker.Stop()
-	}
-}
-
 func (tr *Traceroute) sendLoop() {
 	rand.Seed(time.Now().UTC().UnixNano())
 
@@ -320,7 +284,6 @@ func (tr *Traceroute) sendLoop() {
 }
 
 func (tr *Traceroute) start() (*map[uint16][]methods.TracerouteHop, error) {
-	go tr.timeoutLoop()
 	go tr.icmpListener()
 
 	wg := taskgroup.New()

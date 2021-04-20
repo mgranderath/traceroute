@@ -146,7 +146,6 @@ func (tr *Traceroute) handleICMPMessage(msg listener_channel.ReceivedMessage, da
 	tr.addToResult(request.ttl, methods.TracerouteHop{
 		Success: true,
 		Address: msg.Peer,
-		N:       msg.N,
 		TTL:     request.ttl,
 		RTT:     &elapsed,
 	})
@@ -225,7 +224,6 @@ func (tr *Traceroute) tcpListener() {
 				tr.addToResult(request.ttl, methods.TracerouteHop{
 					Success: true,
 					Address: msg.Peer,
-					N:       msg.N,
 					TTL:     request.ttl,
 					RTT:     &elapsed,
 				})

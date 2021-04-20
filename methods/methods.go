@@ -10,7 +10,6 @@ import (
 type TracerouteHop struct {
 	Success bool
 	Address net.Addr
-	N       *int
 	TTL     uint16
 	RTT     *time.Duration
 }
