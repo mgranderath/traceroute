@@ -20,6 +20,5 @@ func LocalIPPort(dstip net.IP) (net.IP, int) {
 			return udpaddr.IP, udpaddr.Port
 		}
 	}
-	log.Fatal("could not get local ip: " + err.Error())
 	return nil, -1
 }
