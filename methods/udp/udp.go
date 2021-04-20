@@ -16,7 +16,6 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"strconv"
 	"sync"
 	time "time"
 )
@@ -93,15 +92,9 @@ func (tr *Traceroute) addToResult(ttl uint16, hop methods.TracerouteHop) {
 }
 
 func (tr *Traceroute) getUDPConn(try int) (net.IP, int, net.PacketConn) {
-	srcIP, srcPort := util.LocalIPPort(tr.opConfig.destIP)
+	srcIP, _ := util.LocalIPPort(tr.opConfig.destIP)
 
-	_, ok := tr.results.inflightRequests.Load(uint16(srcPort))
-	if ok {
-		log.Println("Port already used")
-		srcIP, srcPort = util.LocalIPPort(tr.opConfig.destIP)
-	}
-
-	udpConn, err := net.ListenPacket("udp", ":"+strconv.Itoa(srcPort))
+	udpConn, err := net.ListenPacket("udp", srcIP.String()+":0")
 	if err != nil {
 		if try > 3 {
 			log.Fatal(err)
@@ -109,7 +102,7 @@ func (tr *Traceroute) getUDPConn(try int) (net.IP, int, net.PacketConn) {
 		return tr.getUDPConn(try + 1)
 	}
 
-	return srcIP, srcPort, udpConn
+	return srcIP, udpConn.LocalAddr().(*net.UDPAddr).Port, udpConn
 }
 
 func (tr *Traceroute) sendMessage(ttl uint16) {
