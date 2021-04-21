@@ -2,6 +2,7 @@ package methods
 
 import (
 	"encoding/binary"
+	"errors"
 	"net"
 	"time"
 )
@@ -23,13 +24,24 @@ type TracerouteConfig struct {
 	Timeout time.Duration
 }
 
-func GetIPHeaderLength(data []byte) int {
-	return int((data[0] & 0x0F) * 4)
+func GetIPHeaderLength(data []byte) (int, error) {
+	if len(data) < 1 {
+		return 0, errors.New("received invalid IP header")
+	}
+	return int((data[0] & 0x0F) * 4), nil
 }
 
-func GetICMPResponsePayload(data []byte) []byte {
-	length := GetIPHeaderLength(data)
-	return data[length:]
+func GetICMPResponsePayload(data []byte) ([]byte, error) {
+	length, err := GetIPHeaderLength(data)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(data) < length {
+		return nil, errors.New("length of packet too short")
+	}
+
+	return data[length:], nil
 }
 
 func GetUDPSrcPort(data []byte) uint16 {

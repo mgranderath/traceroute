@@ -219,7 +219,10 @@ func (tr *Traceroute) sendMessage(ttl uint16) {
 }
 
 func (tr *Traceroute) handleICMPMessage(msg listener_channel.ReceivedMessage, data []byte) {
-	header := methods.GetICMPResponsePayload(data)
+	header, err := methods.GetICMPResponsePayload(data)
+	if err != nil {
+		return
+	}
 	srcPort := methods.GetUDPSrcPort(header)
 	val, ok := tr.results.inflightRequests.LoadAndDelete(srcPort)
 	if !ok {

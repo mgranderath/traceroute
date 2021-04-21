@@ -132,7 +132,10 @@ func (tr *Traceroute) addToResult(ttl uint16, hop methods.TracerouteHop) {
 }
 
 func (tr *Traceroute) handleICMPMessage(msg listener_channel.ReceivedMessage, data []byte) {
-	header := methods.GetICMPResponsePayload(data)
+	header, err := methods.GetICMPResponsePayload(data)
+	if err != nil {
+		return
+	}
 	sequenceNumber := methods.GetTCPSeq(header)
 	val, ok := tr.results.inflightRequests.LoadAndDelete(sequenceNumber)
 	if !ok {
